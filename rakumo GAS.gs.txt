@@ -1,0 +1,545 @@
+// version 1.0.14 Bug-fix:2018年度対応
+// version 1.0.13 pj-workflowの名称変更
+// version 1.0.12 synarioとmometumの人事稟議を追加
+// version 1.0.11 synarioとmomentumを追加。appGroupがない場合に対応
+// version 1.0.10 17年度に変更となる処理（APV/SKの停止）
+// version 1.0.9 申請部署名カラムを追記する
+// version 1.0.8A リクエストの上限超過時に再起問い合わせにより読み込み件数を増やす（2016/1/30）
+// version 1.0.8 リクエストの上限超過時にアラートを出す
+// version 1.0.7 法務審査番号を追記する
+// version 1.0.6 9:00のバグを修正
+// version 1.0.5 監査役のコメント通知用に稟議番号を記載（L列：#12）　※文字列として追記するよう修正
+// 補足　：16桁の数字が扱えない問題：http://language-and-engineering.hatenablog.jp/entry/20150513/JavaScriptIeee754OutOfRangeError
+// version 1.0.4 シート名が変更されていたため修正（Syn._電子稟議16年度）
+// version 1.0.3 グループ会社の人事稟議を追加（Co/SK/APV）
+// version 1.0.2 人事稟議を追加
+// version 1.0.1 グループ会社を追加（Co/SK/APV）
+// version 1.0 ファーストリリース　rakumo-APIを利用して稟議台帳を作成するスクリプト
+// version 1.0 URLの時刻範囲をエンコード化、記載する配列を0〜に修正（配列 0〜、スプレッド記載列 1〜）
+// version 07# rakumo_api_r07: 再度整形、jsonRespons["items"][i]["items"][0]["name"]を見て、自動的にsetValue()する形に変更、日付範囲をfrom_date〜to_dateに変更（バグ対応）
+
+/* Known issue
+・ 2018年度に変わってエラーが発生している模様。API認証エラーが原因。
+*/
+
+// ------------------------- グローバル変数の説明 -------------------------
+
+var API_KEY    = PropertiesService.getScriptProperties().getProperty('RAKUMO_KEY');;
+var SECRET_KEY = PropertiesService.getScriptProperties().getProperty('RAKUMO_SECKEY');
+
+var SLACK_POST  = PropertiesService.getScriptProperties().getProperty('SLACK_POST');  // エラーとかのPOST用Incoming Web Hook
+
+
+
+// ------------------------- 個別に追加や別シートでのテスト用 -------------------------
+/// 中身は都度変更してください。
+
+function Test_rakumo_API(){
+  var startDay = Utilities.formatDate( new Date(), "GMT-15", 'yyyyMMdd') + "T040000+0900";　//前日の4:00〜取得する
+  //startDay = "20170901T040000+0900";
+  var endDay = Utilities.formatDate( new Date(), "JST", 'yyyyMMdd') + "T220000+0900";　//当日の〜5:00までを取得する
+  // endDay = "20171101T040000+0900";
+
+  var count=0;
+
+  var api_date = new Date();
+  if (Utilities.formatDate( api_date, 'GMT','kk') <=23) {
+    var now = Utilities.formatDate( api_date, 'GMT', 'EE, dd MMM yyyy kk:mm:ss') + " GMT";  // hh is 12 hours. kk is 24 hours. MMM is Oct.. MM is 10
+  } else {
+    var now = Utilities.formatDate( api_date, 'GMT', 'EE, dd MMM yyyy 00:mm:ss') + " GMT";  // 24時は00時と表記する必要があるが、kkでは24:xxと表記される問題解決
+  }
+  Logger.log(now);
+
+  GetRakumoFormApi("6085936300163072",startDay,endDay,"supership");//SS契約稟議　
+  /*
+  
+  ///  API署名用データの作成
+  var CodeRequest = "GET";
+//  var api_request = "GET / HTTP/1.1" + String.fromCharCode(10);
+//  api_request += "" + String.fromCharCode(10);
+//  api_request += now;
+  var api_request = "GET" + "\n";
+  api_request += "\n";
+  api_request += now;
+
+  var api_request = "GET";
+  Logger.log(api_request);
+  
+  var api_sha1 = Utilities.computeHmacSignature(Utilities.MacAlgorithm.HMAC_SHA_1,api_request, Seckey,Utilities.Charset.UTF_8);
+  Logger.log(api_sha1);
+  
+  var api_sha1 = Utilities.computeHmacSignature(Utilities.MacAlgorithm.HMAC_SHA_1,api_request, SECRET_KEY);
+  Logger.log(api_sha1);
+  
+  var rakumo_auth = Utilities.base64EncodeWebSafe(api_sha1);
+  Logger.log(rakumo_auth);
+  
+  var headers = { 
+    "Authorization":"RWS " + API_KEY +":" + rakumo_auth,
+    "Date":now,
+    "limit":"1"
+  };
+  Logger.log(headers);
+  
+  var params = { 
+    "method"      : CodeRequest,
+    "muteHttpExceptions" : true,
+    "headers"     : headers
+  };
+
+  //"contentType" : 'application/x-www-form-urlencoded',
+  
+  var apiUrl = "https://a-rakumo.appspot.com/api/workflow/v1/flows?appFormId=";
+  var endUrl = "&status=2&status=5&dateType=1&dateMin=" + encodeURIComponent(startDay) + "&dateMax=" + encodeURIComponent(endDay);  // 承認 または 完了
+  var extUrl = "6085936300163072";
+
+  ///  Request Rakumo-API　（認証の実施）  
+  var strRespons = UrlFetchApp.fetch(apiUrl + extUrl + endUrl, params); //チャットワークAPIエンドポイントからレスポンスを取得
+  //var strRespons = UrlFetchApp.fetch("http://35.187.220.30",params)
+  Logger.log(strRespons);
+  Logger.log("レスポンスコード： %s",strRespons.getResponseCode());
+
+  try{
+    var jsonRespons = JSON.parse(strRespons.getContentText()); //文字列をJSON形式として解析しJSONオブジェクトとして返す
+  }
+  catch(e){
+    Logger.log("エラーが発生しました"+e);
+    postSlack("E2001:1st Stepでエラーが発生しました"+e);
+    var jsonRespons =  {"items":null};
+  }
+  
+ */
+}
+
+
+// ------------------------- Cron用の本体 -------------------------
+/// ### Script Start Rakumo-APIからデータを取得し、電子稟議台帳に格納するスクリプト ###
+/// CRONTAB が主実行関数。時刻トリガーに設定する（毎日4-5時に実行する）
+function rakumo_CRONTAB() {
+  var startDay = Utilities.formatDate( new Date(), "GMT-15", 'yyyyMMdd') + "T040000+0900";　//前日の4:00〜取得する
+  // startDay = "20171101T040000+0900";
+  var endDay = Utilities.formatDate( new Date(), "JST", 'yyyyMMdd') + "T220000+0900";　//当日の〜5:00までを取得する
+  // endDay = "20171101T040000+0900";
+  
+  Logger.log(endDay);
+  
+  var count=0;
+
+  //supership.jp稟議書
+  try{
+    count += GetRakumoFormApi("6085936300163072",startDay,endDay,"supership");//SS契約稟議　
+    count += GetRakumoFormApi("5927453038739456",startDay,endDay,"supership");//SS接待稟議　
+    count += GetRakumoFormApi("6641706435608576",startDay,endDay,"supership");//SS購買稟議
+    count += GetRakumoFormApi("5130057597845504",startDay,endDay,"supership");//SS出張稟議　
+    count += GetRakumoFormApi("6376921240436736",startDay,endDay,"supership");//SS標準稟議　
+  }
+  catch(e){
+    postSlack("E1001:SS稟議台帳の更新作業でエラーが発生しました"+e);
+  }
+
+  //syn.hd稟議書
+  try{
+    count += GetRakumoFormApi("6400662256222208",startDay,endDay,"syndot");//Syn契約稟議　
+    count += GetRakumoFormApi("6440444790308864",startDay,endDay,"syndot");//Syn接待稟議　
+    count += GetRakumoFormApi("6107138014052352",startDay,endDay,"syndot");//Syn購買稟議
+    count += GetRakumoFormApi("5309577351135232",startDay,endDay,"syndot");//Syn出張稟議　
+    count += GetRakumoFormApi("4529816509087744",startDay,endDay,"syndot");//Syn標準稟議　
+  }
+  catch(e){
+    postSlack("E1002:Syn.HD稟議台帳の更新作業でエラーが発生しました"+e);
+  }
+
+  //syn.group稟議書（Connehito株式会社）
+  try{
+    count += GetRakumoFormApi("4546164248281088",startDay,endDay,"connehito");//Connehito株式会社稟議　
+  }
+  catch(e){
+    postSlack("E1003:Syn.group（Connehito株式会社）稟議台帳の更新作業でエラーが発生しました"+e);
+  }
+
+  //syn.group稟議書（Momentum株式会社）
+  try{
+    count += GetRakumoFormApi("6493058171535360",startDay,endDay,"momentum");//Momentum株式会社稟議　
+  }
+  catch(e){
+    postSlack("E1004:Syn.group（Momentum株式会社）稟議台帳の更新作業でエラーが発生しました"+e);
+  }
+  
+  //syn.group稟議書（株式会社シナリオ）
+  try{
+    count += GetRakumoFormApi("6058230865330176",startDay,endDay,"synario");//株式会社シナリオ稟議　
+  }
+  catch(e){
+    postSlack("E1005:Syn.group（株式会社シナリオ）稟議台帳の更新作業でエラーが発生しました"+e);
+  }
+
+//人事稟議書
+  try{
+    count += GetRakumoFormApi("5514428374843392",startDay,endDay,"sshr");//Supership 採用稟議　
+    count += GetRakumoFormApi("5581779384401920",startDay,endDay,"sshr");//Supership 人事稟議　
+  }
+  catch(e){
+    postSlack("E1006:SS人事稟議台帳の更新作業でエラーが発生しました"+e);
+  }
+  try{
+    count += GetRakumoFormApi("6124296785887232",startDay,endDay,"hdhr");//Syn.HD 採用稟議
+    count += GetRakumoFormApi("6180228358209536",startDay,endDay,"hdhr");//Syn.HD 人事稟議
+  }
+  catch(e){
+    postSlack("E1007:SS人事稟議台帳の更新作業でエラーが発生しました"+e);
+  }
+  try{
+    count += GetRakumoFormApi("5869930628775936",startDay,endDay,"cohr");//Connehito 採用稟議
+    count += GetRakumoFormApi("4508026094223360",startDay,endDay,"cohr");//Connehito 人事稟議
+  }
+  catch(e){
+    postSlack("Co人事稟議台帳の更新作業でエラーが発生しました");
+  }
+  try{
+    count += GetRakumoFormApi("4983376141484032",startDay,endDay,"mohr"); // Mometum 採用稟議
+    count += GetRakumoFormApi("6734830720122880",startDay,endDay,"mohr"); // Mometum 人事稟議
+  }
+  catch(e){
+    postSlack("Momentum人事稟議台帳の更新作業でエラーが発生しました");
+  }
+  try{
+    count += GetRakumoFormApi("6511046448775168",startDay,endDay,"syhr"); // Synario 採用稟議
+    count += GetRakumoFormApi("5087026855673856",startDay,endDay,"syhr"); // Synario 人事稟議
+  }
+  catch(e){
+    postSlack("Synario人事稟議台帳の更新作業でエラーが発生しました");
+  }
+  
+  /* 終了済み
+  count += GetRakumoFormApi("6068425562259456",startDay,endDay,"avhr");//Appvador 採用稟議
+  count += GetRakumoFormApi("4958977393426432",startDay,endDay,"avhr");//Appvador 人事稟議
+  count += GetRakumoFormApi("6714240802750464",startDay,endDay,"skhr");//Socket 採用稟議
+  count += GetRakumoFormApi("6478688958545920",startDay,endDay,"skhr");//Socket 人事稟議
+  count += GetRakumoFormApi("5357212819783680",startDay,endDay,"socket");//株式会社Socket稟議　
+  count += GetRakumoFormApi("5060714819223552",startDay,endDay,"appvador");//アップベイダー株式会社稟議
+  */
+  
+  /// Last STEP: 完了通知
+  /// 完了報告@slack
+  var message = "本日の更新はありませんでした。";
+  if (count>0)
+    message = startDay.substr(4,2) + "月" + startDay.substr(6,2) + "日 に可決された " + count +"件を稟議台帳へアップデートしました。";
+  
+  postSlack(message);
+}
+
+
+// ------------------------- スプレッドシートを開く関数 -------------------------
+/// ### SpreadSheetの操作：電子稟議台帳の指定 ###
+/// SpreadSheet:シートを指定し開く
+function SpreadSheet( SPREAD_ID, SHEET_NAME ) {  
+  //Ref: https://developers.google.com/apps-script/reference/spreadsheet/spreadsheet-app?hl=ja
+  
+  var ss = SpreadsheetApp.openById(SPREAD_ID); //スプレッド取得
+  var sheet = ss.getSheetByName(SHEET_NAME);   //シート取得
+    
+  return sheet;
+}
+
+// ------------------------- 時刻をyyyy/MM/dd kk:mm形式に変換する -------------------------
+/// 時刻変換の統一（Rakumo-APIはISO 8601:2014-10-10T13:50:40+09:00で出力される：d →　台帳用の表記：yyyy/MM/dd kk:mm）
+/// ISO 8601形式の時刻表記を台帳用の表記に変更する（GMT→JSTへの変換も実施）
+function DateOutput(d){
+  Logger.log(d);
+  var date = new Date(d.substr(0,4),d.substr(5,2)-1,d.substr(8,2),d.substr(11,2),d.substr(14,2),d.substr(17,2));
+  return Utilities.formatDate( date, "GMT+18", 'yyyy/MM/dd kk:mm');
+}
+
+// ------------------------- 時刻をyyyy/MM/dd形式に変換する -------------------------
+//DateOutput2　は実施予定日（日付までしか記入しない）用の関数
+function DateOutput2(d){
+  Logger.log(d);
+  var date = new Date(d.substr(0,4),d.substr(5,2)-1,d.substr(8,2),d.substr(11,2),d.substr(14,2),d.substr(17,2));
+  return Utilities.formatDate( date, "GMT+18", 'yyyy/MM/dd');
+}
+
+// ------------------------- Slackに通知する。通知先はココで指定 -------------------------
+/// バッチの実行結果をslackに投稿する。messageに引数を渡せば完了
+/// slackに投稿するファンクション
+function postSlack(message)
+{  
+  // アクセス先 #ml-support　Slack側のAdd service integrationから取得
+  var url = SLACK_POST;
+
+  // アクセス先 #pj-workflow 2018/4/20
+  var data = {"channel": "#pj-workflow", "username": "Rakumo", "text": message, "icon_emoji": ":feet:"};
+
+  // POSTオプション
+  var payload = JSON.stringify(data);
+  var headers = {
+    "Accept":"application/json", 
+    "Content-Type":"application/json", 
+    "Authorization":"Basic _authcode_"
+  };
+  
+  var options = {
+    "method" : "POST",
+    "contentType" : "application/json",
+    "headers" : headers,
+    "payload" : payload
+  };
+  
+  // POSTリクエスト
+  var response = UrlFetchApp.fetch(url, options);
+  // HTML結果を取得（引数のcharsetは設定したほうが良い）
+  var content = response.getContentText("UTF-8");
+}
+
+
+
+// ------------------------- Rakumo-APIからデータを取得し、書き込むまでの関数 -------------------------
+/// ***********************
+/// ***** main script *****
+/// ***********************
+/// 戻り値は実施数（count）
+function GetRakumoFormApi(extUrl,startTime,endTime,company) {
+
+  /// 1st STEP:Authentication
+  /// Ref:https://sites.google.com/a/gigei.jp/rakumo-dev/home/
+  /// Ref:https://sites.google.com/a/gigei.jp/rakumo-dev-apikeys/home
+  ///  リクエスト内容
+  var CodeRequest = "GET";
+  var apiUrl = "https://a-rakumo.appspot.com/api/workflow/v1/flows?appFormId=";
+  //  from_date=2016-07-01&to_date=2016-07-31
+  var endUrl = "&status=2&status=5&dateType=1&dateMin=" + encodeURIComponent(startTime) + "&dateMax=" + encodeURIComponent(endTime);  // 承認 または 完了
+  //  var endUrl = "&status=2&status=5&dateType=1&from_date=" + startTime + "&to_date=" + endTime;  // 承認 または 完了
+  
+  ///  署名のための時刻処理  
+  // Rakumo requre RFC822 format. Like Thu, 13 Oct 2011 21:30:05 GMT
+  // rakumoサーバー側で24時を処理できないため、00へ変換が必要
+  var api_date = new Date();
+  
+  if (Utilities.formatDate( api_date, 'GMT','kk') <=23) {
+    var now = Utilities.formatDate( api_date, 'GMT', 'EE, dd MMM yyyy kk:mm:ss') + " GMT";  // hh is 12 hours. kk is 24 hours. MMM is Oct.. MM is 10
+  } else {
+    var now = Utilities.formatDate( api_date, 'GMT', 'EE, dd MMM yyyy 00:mm:ss') + " GMT";  // 24時は00時と表記する必要があるが、kkでは24:xxと表記される問題解決
+  }
+  
+  ///  API署名用データの作成
+  var api_request = CodeRequest + "\n";  // LF改行コード指定 : [LF] is String.fromCharCode(10)
+  if (CodeRequest=="GET"){
+    api_request += "\n";
+  } else {
+    api_request += "application/x-www-form-urlencoded\n";
+  }
+  api_request += now;
+  
+  ///  ハッシュ化
+  var api_sha1 = Utilities.computeHmacSignature(Utilities.MacAlgorithm.HMAC_SHA_1,api_request, SECRET_KEY);// HMAC_SHA1
+  var rakumo_auth = Utilities.base64Encode(api_sha1);// Base64 encode
+  
+  Logger.log(rakumo_auth);
+  Logger.log(now);
+  
+  
+  ///  リクエストヘッダの作成
+  // 参考）　https://developers.google.com/apps-script/reference/url-fetch/url-fetch-app#fetchurl-params
+  
+  var headers = { 
+    "Authorization":"RWS " + API_KEY +":" + rakumo_auth,
+    "Date":now,
+    "limit":1
+  };
+  
+  var payload = { // payloadをつけると自動的にPOSTになる
+  };
+  
+  var params = { 
+    "method" : CodeRequest,
+    "muteHttpExceptions" : true,
+    "contentType" : 'application/x-www-form-urlencoded',
+    "headers": headers
+    //             "payload" : payload　//参考）使う場合は
+  };
+  
+  ///  Request Rakumo-API　（認証の実施）  
+  if(startTime==-1){
+    var strRespons = UrlFetchApp.fetch(extUrl,　params);
+  } else {
+    var strRespons = UrlFetchApp.fetch(apiUrl + extUrl + endUrl, params); //チャットワークAPIエンドポイントからレスポンスを取得
+  }
+  
+  try{
+    var jsonRespons = JSON.parse(strRespons.getContentText()); //文字列をJSON形式として解析しJSONオブジェクトとして返す
+  }
+  catch(e){
+    Logger.log("エラーが発生しました"+e);
+    postSlack("E2001:1st Stepでエラーが発生しました"+e);
+    var jsonRespons =  {"items":null};
+  }
+  
+
+  Logger.log("レスポンスコード： %s",strRespons.getResponseCode());
+
+
+  /// 2nd STEP:SpreadSheet Request
+  /// スプレッドシートの呼び出し（台帳シートの指定）
+  switch(company){
+    case "supership": var sheet = SpreadSheet('1YGLF5fMCxfC6_IhEzf49CdztRE_mEiDV6n9pmfstNTQ','Supership電子稟議'); //Supership電子稟議
+      break;
+    case "syndot": var sheet = SpreadSheet('1YGLF5fMCxfC6_IhEzf49CdztRE_mEiDV6n9pmfstNTQ','syndot電子稟議'); //Syn.HD電子稟議
+      break;
+    case "connehito": var sheet = SpreadSheet('1aI0w57L9LB-0jFfiRyYKEfK29hY5FlRb-rpiY2HIIGw','connehito電子稟議'); //Connehito電子稟議
+      break;
+    case "momentum": var sheet = SpreadSheet('1wWZW57wAOdjnUGePf42YJtlO2bmFVuO0SJVqQ0zug18','Momentum電子稟議'); //Momentum電子稟議
+      break;
+    case "synario": var sheet = SpreadSheet('15IHkLg41OVxr-2_jmb0G-Ta9uL1cb4WKJmcO5J7LEIw','Synario電子稟議'); //Synario電子稟議
+      break;
+    case "sshr": var sheet = SpreadSheet('1oWZoqpXbwSfajyhVSDYJioOGXmQdqCInf2vk1lgu7CI','SS電今年度'); //Supership人事稟議
+      break;
+    case "hdhr": var sheet = SpreadSheet('1pH4XVhJH2xIwiKuOjTNkmxdOzUJgrELIqZ2dKpMb148','HD電今年度'); //Syn.HD人事稟議
+      break;
+    case "cohr": var sheet = SpreadSheet('1pH4XVhJH2xIwiKuOjTNkmxdOzUJgrELIqZ2dKpMb148','CO電今年度'); //Connehito人事稟議
+      break;
+    case "mohr": var sheet = SpreadSheet('1pH4XVhJH2xIwiKuOjTNkmxdOzUJgrELIqZ2dKpMb148','MO電今年度'); //Momentum人事稟議
+      break;
+    case "syhr": var sheet = SpreadSheet('1pH4XVhJH2xIwiKuOjTNkmxdOzUJgrELIqZ2dKpMb148','SY電今年度'); //Synario人事稟議
+      break;
+    default:
+      postSlack("E2002:2nd Stepで台帳が見つかりません");
+  }
+  
+  /* 終了済み
+  case "socket": var sheet = SpreadSheet('1FStaibKFbU4P3lMcTDyE9qZSjpkmFbEnW_1KXBNBVtM','socket電子稟議'); //Socket電子稟議
+  break;
+  case "appvador": var sheet = SpreadSheet('1ynBV96osiS3cdSNXatWZSLzUUrZ8sCiniele9N_QpFY','appvador電子稟議'); //Appvador電子稟議
+  break;
+  case "avhr": var sheet = SpreadSheet('1pH4XVhJH2xIwiKuOjTNkmxdOzUJgrELIqZ2dKpMb148','APV電16年度'); //Appvador人事稟議
+  break;
+  case "skhr": var sheet = SpreadSheet('1pH4XVhJH2xIwiKuOjTNkmxdOzUJgrELIqZ2dKpMb148','SK電16年度'); //Socket人事稟議
+  break;
+  */
+  
+  var startrow = 1; //行 row
+  var startcol = 1; //列 collums
+  var lastrow = sheet.getLastRow();
+  var lastcol = sheet.getLastColumn();
+  
+  var sheetdata = sheet.getSheetValues(startrow, startcol, lastrow, lastcol); //sheetdata[0][0] - sheetdata[lastrow][lastcal]　Lastがあるので処理しやすい。
+  
+  
+  /// 3rd STEP:Request JSON
+  /// リクエストの処理
+  var count=0; //処理件数報告のため
+  var temp=""
+  // JSON.parse(text) は JSON解析
+  // JSON.stringify(value)　でJSONをstringデータに変換
+  Logger.log(JSON.parse(JSON.stringify(jsonRespons["items"])));
+  if (!JSON.parse(JSON.stringify(jsonRespons["items"]))){
+    Logger.log("nothing for write...");
+    postSlack("E2003A:3nd Stepの最初でJSONが空になっているぞ");
+  } else {
+    for ( var i=0; i < jsonRespons["items"].length;i++){
+      // JSONからデータ抽出
+      try {
+        count=count+1;
+        // 稟議番号
+        sheet.getRange(lastrow+i+1,1).setValue(JSON.parse(JSON.stringify(jsonRespons["items"][i]["number"])));
+        // 申請日
+        sheet.getRange(lastrow+i+1,2).setValue(DateOutput(JSON.parse(JSON.stringify(jsonRespons["items"][i]["appDate"]))));
+        //起案者
+        sheet.getRange(lastrow+i+1,3).setValue(JSON.parse(JSON.stringify(jsonRespons["items"][i]["appUser"]["name"])));
+      }
+      catch(e){
+        postSlack("E2003C:データ抽出でエラーが発生しました。"+e);
+      }
+
+      try {
+        // 種類        
+        sheet.getRange(lastrow+i+1,4).setValue(JSON.parse(JSON.stringify(jsonRespons["items"][i]["name"])));
+        // 件名
+        sheet.getRange(lastrow+i+1,5).setValue(JSON.parse(JSON.stringify(jsonRespons["items"][i]["title"])));
+      }
+      catch(e){
+        postSlack("E2003D:データ抽出でエラーが発生しました。"+e);
+      }
+
+      try {
+        if(!jsonRespons["items"][i]["appGroup"]) {
+        } else {
+          // 申請部署名
+          sheet.getRange(lastrow+i+1,15).setValue(JSON.parse(JSON.stringify(jsonRespons["items"][i]["appGroup"]["name"])));
+        }
+      }
+      catch(e){
+        postSlack("E2003E:データ抽出でエラーが発生しました。"+e);
+      }
+
+      try {
+        for (var j=2; j < jsonRespons["items"][i]["items"].length;j++){
+          if (!jsonRespons["items"][i]["items"][j]["name"]){
+          } else {
+            switch( JSON.parse(JSON.stringify(jsonRespons["items"][i]["items"][j]["name"]))) {
+              case "契約締結先": sheet.getRange(lastrow+i+1,6).setValue(JSON.parse(JSON.stringify(jsonRespons["items"][i]["items"][j]["value"]))) 
+              break;
+              case "相手先": sheet.getRange(lastrow+i+1,6).setValue(JSON.parse(JSON.stringify(jsonRespons["items"][i]["items"][j]["value"]))) 
+              break;
+              case "氏名": sheet.getRange(lastrow+i+1,6).setValue(JSON.parse(JSON.stringify(jsonRespons["items"][i]["items"][j]["value"]))) 
+              break;
+              case "購入予定先": sheet.getRange(lastrow+i+1,6).setValue(JSON.parse(JSON.stringify(jsonRespons["items"][i]["items"][j]["value"]))) 
+              break;
+              case "決裁事項": sheet.getRange(lastrow+i+1,7).setValue(JSON.parse(JSON.stringify(jsonRespons["items"][i]["items"][j]["value"])));
+                break;
+              case "目的": sheet.getRange(lastrow+i+1,7).setValue(JSON.parse(JSON.stringify(jsonRespons["items"][i]["items"][j]["value"])));
+                break;
+              case "契約期間": sheet.getRange(lastrow+i+1,8).setValue(JSON.parse(JSON.stringify(jsonRespons["items"][i]["items"][j]["value"])));
+                break;
+              case "実施時期": sheet.getRange(lastrow+i+1,8).setValue(JSON.parse(JSON.stringify(jsonRespons["items"][i]["items"][j]["value"])));
+                break;
+              case "実施予定日": //valueDateの修正(2017/3/8)
+                temp = JSON.parse(JSON.stringify(jsonRespons["items"][i]["items"][j]["valueYear"]))+"/"+JSON.parse(JSON.stringify(jsonRespons["items"][i]["items"][j]["valueMonth"]))+"/"+JSON.parse(JSON.stringify(jsonRespons["items"][i]["items"][j]["valueDay"]));
+                sheet.getRange(lastrow+i+1,8).setValue(temp);
+                break;
+              case "出張日／期間": //valueDateの修正(2017/3/8)
+                temp = JSON.parse(JSON.stringify(jsonRespons["items"][i]["items"][j]["valueYear"]))+"/"+JSON.parse(JSON.stringify(jsonRespons["items"][i]["items"][j]["valueMonth"]))+"/"+JSON.parse(JSON.stringify(jsonRespons["items"][i]["items"][j]["valueDay"]));
+                sheet.getRange(lastrow+i+1,8).setValue(temp);
+                break;
+              case "決裁金額": sheet.getRange(lastrow+i+1,9).setValue(JSON.parse(JSON.stringify(jsonRespons["items"][i]["items"][j]["value"])));
+                break;
+              case "費用合計": sheet.getRange(lastrow+i+1,9).setValue(JSON.parse(JSON.stringify(jsonRespons["items"][i]["items"][j]["value"])));
+                break;
+              case "法務審査番号": sheet.getRange(lastrow+i+1,14).setValue(JSON.parse(JSON.stringify(jsonRespons["items"][i]["items"][j]["value"])));
+                break;
+              case "事後理由": sheet.getRange(lastrow+i+1,16).setValue(JSON.parse(JSON.stringify(jsonRespons["items"][i]["items"][j]["value"])));
+                break;
+              default:
+                Logger.log(JSON.parse(JSON.stringify(jsonRespons["items"][i]["title"])) + j);
+            }
+          }
+        }
+      }
+      catch(e){
+        postSlack("E2003F:データ抽出でエラーが発生しました。"+e);
+      }
+
+      try {
+        // リンク先 URL
+        sheet.getRange(lastrow+i+1,10).setValue(JSON.parse(JSON.stringify(jsonRespons["items"][i]["htmlLink"])));
+        // 最終決裁日
+        sheet.getRange(lastrow+i+1,11).setValue(DateOutput(JSON.parse(JSON.stringify(jsonRespons["items"][i]["finalDecisionDate"]))));
+        // 稟議番号
+        sheet.getRange(lastrow+i+1,12).setNumberFormat('@'); // 文字列として記載する（桁あふれにより四捨五入されてしまうため
+        sheet.getRange(lastrow+i+1,12).setValue(String(JSON.parse(JSON.stringify(jsonRespons["items"][i]["id"]))));
+      }
+      catch(e){
+        postSlack("E2003G:データ抽出でエラーが発生しました。"+e);
+      } 
+    }
+  }
+  
+  // 取得した情報に続き（20件以上）がないかを確認する
+  // 20件を超える場合は、再帰実行を行う。URLは直指定。
+  if (jsonRespons["nextLink"]!=null){
+    postSlack("上限を超える処理があります。実行内容を追記して下さい。");
+    Logger.log(JSON.parse(JSON.stringify(jsonRespons["nextLink"])));
+    GetRakumoFormApi(JSON.parse(JSON.stringify(jsonRespons["nextLink"])),-1,-1,company);
+  }
+
+  // Logger.log(count);
+  return count;
+}
